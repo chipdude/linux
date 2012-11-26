@@ -8,6 +8,9 @@
 #include <linux/security.h>
 #include <linux/file.h>
 #include <linux/seq_file.h>
+#ifdef CONFIG_EPOLL
+#include <linux/eventpoll.h>
+#endif
 
 #include <linux/proc_fs.h>
 
@@ -48,8 +51,10 @@ static int seq_show(struct seq_file *m, void *v)
 	}
 
 	if (!ret) {
-                seq_printf(m, "pos:\t%lli\nflags:\t0%o\n",
+		seq_printf(m, "pos:\t%lli\nflags:\t0%o\n",
 			   (long long)file->f_pos, f_flags);
+		if (unlikely(is_file_eventpoll(file)))
+			eventpoll_proc_fdinfo(m, file);
 		fput(file);
 	}
 

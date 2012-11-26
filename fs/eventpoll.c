@@ -34,6 +34,7 @@
 #include <linux/mutex.h>
 #include <linux/anon_inodes.h>
 #include <linux/device.h>
+#include <linux/seq_file.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
 #include <asm/mman.h>
@@ -296,13 +297,6 @@ ctl_table epoll_table[] = {
 	{ }
 };
 #endif /* CONFIG_SYSCTL */
-
-static const struct file_operations eventpoll_fops;
-
-static inline int is_file_epoll(struct file *f)
-{
-	return f->f_op == &eventpoll_fops;
-}
 
 /* Setup the structure that is used as key for the RB tree */
 static inline void ep_set_ffd(struct epoll_filefd *ffd,
@@ -784,7 +778,7 @@ static unsigned int ep_eventpoll_poll(struct file *file, poll_table *wait)
 }
 
 /* File callbacks that implement the eventpoll file behaviour */
-static const struct file_operations eventpoll_fops = {
+const struct file_operations eventpoll_fops = {
 	.release	= ep_eventpoll_release,
 	.poll		= ep_eventpoll_poll,
 	.llseek		= noop_llseek,
@@ -1065,7 +1059,7 @@ static int reverse_path_check_proc(void *priv, void *cookie, int call_nests)
 
 	list_for_each_entry(epi, &file->f_ep_links, fllink) {
 		child_file = epi->ep->file;
-		if (is_file_epoll(child_file)) {
+		if (is_file_eventpoll(child_file)) {
 			if (list_empty(&child_file->f_ep_links)) {
 				if (path_count_inc(call_nests)) {
 					error = -1;
@@ -1551,7 +1545,7 @@ static int ep_loop_check_proc(void *priv, void *cookie, int call_nests)
 	list_add(&ep->visited_list_link, &visited_list);
 	for (rbp = rb_first(&ep->rbr); rbp; rbp = rb_next(rbp)) {
 		epi = rb_entry(rbp, struct epitem, rbn);
-		if (unlikely(is_file_epoll(epi->ffd.file))) {
+		if (unlikely(is_file_eventpoll(epi->ffd.file))) {
 			ep_tovisit = epi->ffd.file->private_data;
 			if (ep_tovisit->visited)
 				continue;
@@ -1719,7 +1713,7 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 	 * adding an epoll file descriptor inside itself.
 	 */
 	error = -EINVAL;
-	if (file == tfile || !is_file_epoll(file))
+	if (file == tfile || !is_file_eventpoll(file))
 		goto error_tgt_fput;
 
 	/*
@@ -1745,7 +1739,7 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 		did_lock_epmutex = 1;
 	}
 	if (op == EPOLL_CTL_ADD) {
-		if (is_file_epoll(tfile)) {
+		if (is_file_eventpoll(tfile)) {
 			error = -ELOOP;
 			if (ep_loop_check(ep, tfile) != 0) {
 				clear_tfile_check_list();
@@ -1831,7 +1825,7 @@ SYSCALL_DEFINE4(epoll_wait, int, epfd, struct epoll_event __user *, events,
 	 * the user passed to us _is_ an eventpoll file.
 	 */
 	error = -EINVAL;
-	if (!is_file_epoll(f.file))
+	if (!is_file_eventpoll(f.file))
 		goto error_fput;
 
 	/*
@@ -1891,6 +1885,32 @@ SYSCALL_DEFINE6(epoll_pwait, int, epfd, struct epoll_event __user *, events,
 
 	return error;
 }
+
+#ifdef CONFIG_PROC_FS
+
+/* return a printable representation of the eventpoll state for /proc/#/fdinfo/# */
+void eventpoll_proc_fdinfo(struct seq_file *m, struct file *file) {
+	struct eventpoll *ep;
+	struct epitem *epi = NULL;
+	struct rb_node *rbp;
+
+	BUG_ON(!is_file_eventpoll(file));
+	ep = file->private_data;
+	mutex_lock_nested(&ep->mtx, 0);
+
+	for (rbp = ep->rbr.rb_node; rbp; ) {
+		epi = rb_entry(rbp, struct epitem, rbn);
+		if (rbp == ep->rbr.rb_node)
+			seq_puts(m, "eventpoll:");
+		seq_printf(m, " %d:%x:%llx", epi->ffd.fd, epi->event.events, epi->event.data);
+	}
+	if (epi)
+		seq_putc(m, '\n');
+
+	mutex_unlock(&ep->mtx);
+}
+
+#endif /* CONFIG_PROC_FS */
 
 static int __init eventpoll_init(void)
 {

@@ -18,9 +18,12 @@
 
 /* Forward declarations to avoid compiler errors */
 struct file;
+struct seq_file;
 
 
 #ifdef CONFIG_EPOLL
+
+#include <linux/fs.h>
 
 /* Used to initialize the epoll bits inside the "struct file" */
 static inline void eventpoll_init_file(struct file *file)
@@ -61,11 +64,27 @@ static inline void eventpoll_release(struct file *file)
 	eventpoll_release_file(file);
 }
 
+extern const struct file_operations eventpoll_fops;
+
+static inline bool is_file_eventpoll(struct file *f)
+{
+	return f->f_op == &eventpoll_fops;
+}
+
 #else
 
 static inline void eventpoll_init_file(struct file *file) {}
 static inline void eventpoll_release(struct file *file) {}
+static inline bool is_file_eventpoll(struct file *f) { return false; }
 
 #endif
+
+
+#if defined(CONFIG_EPOLL) && defined(CONFIG_PROC_FS)
+void eventpoll_proc_fdinfo(struct seq_file *m, struct file *file);
+#else
+static inline void eventpoll_proc_fdinfo(struct seq_file *m, struct file *file) {}
+#endif
+
 
 #endif /* #ifndef _LINUX_EVENTPOLL_H */
